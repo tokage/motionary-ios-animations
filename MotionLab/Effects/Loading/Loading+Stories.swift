@@ -277,7 +277,7 @@ private struct BlurUpDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await load() }
+        .task(id: run) { if !ctx.isStill { await load() } }
     }
 
     private func isLoaded(_ index: Int) -> Bool {

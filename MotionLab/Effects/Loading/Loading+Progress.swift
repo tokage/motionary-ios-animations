@@ -107,7 +107,7 @@ private struct GlowBarDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var header: some View {
@@ -235,7 +235,7 @@ private struct ProgressRingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var centerLabel: some View {

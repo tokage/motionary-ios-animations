@@ -150,6 +150,13 @@ extension CatalogTools {
                 let image = PreviewStill.render(effect: effect, language: .en, colorScheme: scheme, pixelsPerPoint: 1)
                 let ink: Double = image.map(inkCoverage) ?? 0
                 let schemeName = scheme == .dark ? "dark" : "light"
+                // `-ML_auditStillImages YES`: also keep every still as Documents/stills/<scheme>/<id>.png (visual review).
+                if UserDefaults.standard.bool(forKey: "ML_auditStillImages"), let image, let data = image.pngData(),
+                   let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                    let dir = folder.appendingPathComponent("stills/\(schemeName)", isDirectory: true)
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    try? data.write(to: dir.appendingPathComponent("\(effect.id).png"))
+                }
                 let isLow = effect.category == .charts && ink < threshold
                 rows.append([
                     "id": effect.id,

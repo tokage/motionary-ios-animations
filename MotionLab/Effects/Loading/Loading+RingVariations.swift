@@ -95,7 +95,7 @@ private struct TickRingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var center: some View {
@@ -254,7 +254,7 @@ private struct InstallPieDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func icon(_ index: Int) -> some View {
@@ -418,7 +418,7 @@ private struct ElasticRingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func play() async {
@@ -538,7 +538,7 @@ private struct RingToCheckDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var badge: some View {
@@ -682,7 +682,7 @@ private struct DashFlowRingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var avatar: some View {

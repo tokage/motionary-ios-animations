@@ -64,7 +64,7 @@ private struct BreathingSkeletonDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func rowSlot(_ index: Int) -> some View {
@@ -220,7 +220,7 @@ private struct MosaicResolveDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func play() async {

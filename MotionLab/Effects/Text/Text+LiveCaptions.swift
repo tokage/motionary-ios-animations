@@ -92,7 +92,7 @@ private struct TextLiveCaptionsDemo: View {
             Haptics.tap(.light)
             runs += 1
         }
-        .task(id: runs) { await run() }
+        .task(id: runs) { if !ctx.isStill { await run() } }
     }
 
     // MARK: Speaker tiles

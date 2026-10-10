@@ -70,7 +70,7 @@ private struct SearchExpandDemo: View {
             .padding(16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: expanded) { await typeQuery() }
+        .task(id: expanded) { if !ctx.isStill { await typeQuery() } }
         .autoplay(ctx.isPreview, every: 2.8) { toggle() }
     }
 

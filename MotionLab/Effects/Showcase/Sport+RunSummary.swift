@@ -55,12 +55,14 @@ private struct BentoCountUp: View {
     let target: Double
     let decimals: Int
     let delay: Double
+    let still: Bool
     @State private var shown: Double
 
     init(target: Double, decimals: Int, delay: Double, still: Bool = false) {
         self.target = target
         self.decimals = decimals
         self.delay = delay
+        self.still = still
         _shown = State(initialValue: still ? target : 0)
     }
 
@@ -71,6 +73,8 @@ private struct BentoCountUp: View {
     }
 
     private func count() async {
+        // A still shows the final number: ImageRenderer may run `task`, and counting would restart it at 0.
+        guard !still else { return }
         guard target > 0 else {
             withAnimation(.easeIn(duration: 0.2)) { shown = 0 }
             return
@@ -131,7 +135,8 @@ private struct SportRunSummaryDemo: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: runID) { await replay() }
+        // Stills stay assembled: ImageRenderer can run `task`, and replay() would collapse the bento (blank still).
+        .task(id: runID) { if !ctx.isStill { await replay() } }
         // The bento already assembles on appear, so the detail stage skips its one-shot intro replay.
         .autoplay(ctx.isPreview, every: 3.8, delay: 3.8, intro: false) { runID += 1 }
     }

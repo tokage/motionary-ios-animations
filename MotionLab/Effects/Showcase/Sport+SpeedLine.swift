@@ -143,7 +143,7 @@ private struct SportSpeedDemo: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: runID) { await play() }
+        .task(id: runID) { if !ctx.isStill { await play() } }
         // The run already starts on appear, so the detail stage skips its one-shot intro replay.
         .autoplay(ctx.isPreview, every: 4.4, delay: 4.4, intro: false) { runID += 1 }
     }

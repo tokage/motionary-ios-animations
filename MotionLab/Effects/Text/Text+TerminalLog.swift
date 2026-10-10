@@ -141,7 +141,7 @@ private struct TextTerminalLogDemo: View {
             Haptics.tap(.rigid)
             runs += 1
         }
-        .task(id: runs) { await run() }
+        .task(id: runs) { if !ctx.isStill { await run() } }
     }
 
     // MARK: Window

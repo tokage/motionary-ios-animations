@@ -86,7 +86,7 @@ private struct StageLoaderDemo: View {
             Haptics.tap()
             run += 1
         }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
         .onChange(of: count) { run += 1 }
     }
 

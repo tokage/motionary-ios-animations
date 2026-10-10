@@ -147,7 +147,7 @@ private struct LifeSleepDemo: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: runID) { await play() }
+        .task(id: runID) { if !ctx.isStill { await play() } }
         // The reveal already plays on appear; the detail stage must not start a preview scrub that never clears.
         .autoplay(ctx.isPreview, every: 1.1, delay: 2.0, intro: false) { previewTick() }
     }

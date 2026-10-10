@@ -128,7 +128,7 @@ private struct SegmentBarDemo: View {
                 }
             }
         }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func play() async {
@@ -425,7 +425,7 @@ private struct TooltipBarDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var thumbnail: some View {
@@ -597,7 +597,7 @@ private struct CandyStripesDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private func stepText(zh: Bool) -> String {

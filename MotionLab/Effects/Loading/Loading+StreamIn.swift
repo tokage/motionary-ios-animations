@@ -166,7 +166,7 @@ private struct StreamInDemo: View {
             Haptics.tap()
             run += 1
         }
-        .task(id: run) { await stream() }
+        .task(id: run) { if !ctx.isStill { await stream() } }
         .onChange(of: ctx.language) { run += 1 }
     }
 

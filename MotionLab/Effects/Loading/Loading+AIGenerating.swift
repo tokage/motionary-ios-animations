@@ -43,7 +43,7 @@ private struct AIGeneratingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await cycle() }
+        .task(id: run) { if !ctx.isStill { await cycle() } }
     }
 
     private func cycle() async {

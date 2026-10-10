@@ -132,7 +132,7 @@ private struct CountdownRingDemo: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
         .onTapGesture { run += 1 }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
         .onChange(of: ctx.int("from")) { run += 1 }
     }
 

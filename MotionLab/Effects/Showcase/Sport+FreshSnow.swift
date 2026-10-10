@@ -54,7 +54,7 @@ private struct SportSnowDemo: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: runID) { await refresh() }
+        .task(id: runID) { if !ctx.isStill { await refresh() } }
         // The first refresh already runs on appear, so the detail stage skips its one-shot intro replay.
         .autoplay(ctx.isPreview, every: 3.4, delay: 3.4, intro: false) { runID += 1 }
     }

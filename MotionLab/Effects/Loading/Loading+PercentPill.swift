@@ -84,7 +84,7 @@ private struct PercentPillDemo: View {
             Haptics.tap()
             run += 1
         }
-        .task(id: run) { await play() }
+        .task(id: run) { if !ctx.isStill { await play() } }
     }
 
     private var guide: some View {
