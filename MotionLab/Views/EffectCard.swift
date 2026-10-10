@@ -12,8 +12,13 @@ enum StageMetrics {
 /// Non-interactive thumbnail of an effect's demo.
 ///
 /// Performance / accessibility policy:
-/// - When previews may animate, the live demo is only mounted while the thumbnail is on screen,
-///   so a long grid never keeps dozens of timelines and autoplay loops running off-screen.
+/// - When previews may animate, the live demo is only mounted while the thumbnail is on screen and its
+///   page is not covered by another one (a pushed detail page, another tab), so a long grid never keeps
+///   dozens of timelines and autoplay loops running off-screen or under the page in front.
+/// - Demos measured too heavy for a thumbnail (`PreviewCost`) always show their still frame.
+/// - At most `LivePreviewBudget.limit` (6) thumbnails play live at once, the first ones to come on screen;
+///   the rest show their still frame until a slot frees. On iPad a grid can show 12–20 cards, and that
+///   many live demos at once saturate the GPU.
 /// - When "Animate previews" is off or Reduce Motion is on, the demo is rendered once into a
 ///   still image (`PreviewSnapshotCache`) and shown as a plain `Image`, so demos with their own
 ///   `TimelineView` / `phaseAnimator` loops truly stand still. Demos built on UIKit-backed views
@@ -37,6 +42,10 @@ struct PreviewStage: View {
     /// Starts off: lazy grids build cells slightly outside the viewport, and those must not mount
     /// their live demo. `onScrollVisibilityChange` reports `true` on first layout for visible cells.
     @State private var isOnScreen = false
+    /// False while the page holding this thumbnail is covered (pushed over, another tab).
+    @State private var isPresented = true
+    /// This thumbnail's place in `LivePreviewBudget`.
+    @State private var budgetToken = UUID()
     /// Last snapshot this view rendered (kept so an NSCache eviction never blanks a visible card).
     @State private var snapshot: UIImage?
     @State private var snapshotKey: String?
@@ -44,13 +53,17 @@ struct PreviewStage: View {
     @State private var failedKey: String?
 
     var body: some View {
-        let isOnScreen = self.isOnScreen || alwaysOnScreen
+        let isOnScreen = (self.isOnScreen && isPresented) || alwaysOnScreen
+        // The trailer's embedded screens are recorded as they are, never budgeted.
+        // Heavy demos (`PreviewCost`) show their still in grids; the trailer's screens play everything.
+        let playsLive = motionEnabled && isOnScreen
+            && (alwaysOnScreen || (PreviewCost.playsLive(effect.id) && LivePreviewBudget.shared.allows(budgetToken)))
         GeometryReader { proxy in
             let side = StageMetrics.previewCanvas
             let scale = proxy.size.width / side
             let key = makeSnapshotKey(pixelsPerPoint: scale * displayScale)
             Group {
-                if motionEnabled {
+                if playsLive {
                     if isOnScreen {
                         liveDemo(scale: scale, size: proxy.size, autoplay: true)
                     }
@@ -67,6 +80,16 @@ struct PreviewStage: View {
                     // A soft shimmer skeleton (reads as "loading", never as an empty tile) until
                     // the still is ready.
                     StillPlaceholder().task(id: key, priority: urgent ? .userInitiated : .medium) {
+                        // A still rendered in an earlier session (or evicted from memory) comes back from disk.
+                        if let stored = await PreviewStillDiskCache.load(key: key, scale: scale * displayScale) {
+                            guard !Task.isCancelled else { return }
+                            PreviewSnapshotCache.shared.insert(stored, for: key)
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                snapshot = stored
+                                snapshotKey = key
+                            }
+                            return
+                        }
                         // Let the grid's first frame land, then wait for a free render slot so a
                         // screenful of new cards never rasterises in one scroll frame. Urgent tiles
                         // (the first cards of a page, the detail page's Variations row) go first.
@@ -74,7 +97,9 @@ struct PreviewStage: View {
                         guard !Task.isCancelled else { return }
                         let started = ContinuousClock.now
                         renderSnapshot(key: key, pixelsPerPoint: scale * displayScale)
-                        SnapshotGate.didRender(taking: ContinuousClock.now - started)
+                        let took = ContinuousClock.now - started
+                        SnapshotGate.didRender(taking: took)
+                        PerfLog.log("still \(effect.id) \(took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000) ms")
                     }
                 }
             }
@@ -85,12 +110,33 @@ struct PreviewStage: View {
         .background { if showsBackground { StageBackground() } }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(StageRim(cornerRadius: cornerRadius))
-        .animation(.easeInOut(duration: 0.25), value: isOnScreen)
+        .animation(.easeInOut(duration: 0.25), value: playsLive)
+        .onChange(of: playsLive) { _, live in
+            PerfLog.log("\(live ? "live+" : "live-") \(effect.id) (budget \(LivePreviewBudget.shared.order.count))")
+        }
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             if self.isOnScreen != visible { self.isOnScreen = visible }
+            updateBudget(onScreen: visible, presented: isPresented)
+        }
+        .onAppear {
+            isPresented = true
+            updateBudget(onScreen: isOnScreen, presented: true)
+        }
+        .onDisappear {
+            isPresented = false
+            updateBudget(onScreen: isOnScreen, presented: false)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Holds a live slot only while this thumbnail is visible on the page in front.
+    private func updateBudget(onScreen: Bool, presented: Bool) {
+        if onScreen && presented && motionEnabled && PreviewCost.playsLive(effect.id) {
+            LivePreviewBudget.shared.enter(budgetToken)
+        } else {
+            LivePreviewBudget.shared.leave(budgetToken)
+        }
     }
 
     private var context: DemoContext {
@@ -99,12 +145,21 @@ struct PreviewStage: View {
 
     private func liveDemo(scale: CGFloat, size: CGSize, autoplay: Bool) -> some View {
         let side = StageMetrics.previewCanvas
+        // The demo is laid out on its 340 pt canvas and scaled down to the thumbnail. Its rasterised layers
+        // (Canvas, drawingGroup, shaders, blurs) follow `displayScale`, so without this they render the full
+        // canvas at device resolution, 3–4× the pixels the thumbnail shows, and the GPU throws the rest away.
+        let renderScale: CGFloat = PreviewStage.matchesThumbnailResolution ? max(displayScale * min(scale, 1), 1) : displayScale
         return EffectDemoView(effect: effect, context: context)
             .frame(width: side, height: side)
+            .environment(\.displayScale, renderScale)
             .scaleEffect(scale)
             .frame(width: size.width, height: size.height)
             .environment(\.demoAutoplayEnabled, autoplay)
     }
+
+    /// `-ML_previewScale NO` renders thumbnails at full canvas resolution (A/B tests).
+    static let matchesThumbnailResolution: Bool = UserDefaults.standard.object(forKey: "ML_previewScale") == nil
+        || UserDefaults.standard.bool(forKey: "ML_previewScale")
 
     private func makeSnapshotKey(pixelsPerPoint: CGFloat) -> String {
         // Bucketed so sub-point layout differences reuse the same image.
@@ -128,6 +183,7 @@ struct PreviewStage: View {
         )
         if let image {
             PreviewSnapshotCache.shared.insert(image, for: key)
+            PreviewStillDiskCache.store(image, key: key)
             // The still cross-fades in over the placeholder.
             withAnimation(.easeOut(duration: 0.25)) {
                 snapshot = image
@@ -135,6 +191,121 @@ struct PreviewStage: View {
             }
         } else {
             failedKey = key
+        }
+    }
+}
+
+/// How many thumbnails may play their live demo at once, and when each one starts.
+///
+/// Thumbnails take slots in the order they come on screen and give them back when they scroll away or their
+/// page is covered; the others show their still. Starting a live demo is the expensive moment (building its
+/// views, its first frames, sometimes a shader), so slots are granted one at a time: only once the screen
+/// has settled (no thumbnail joined or left for `settle`, no scroll view moving), then one every `spacing`.
+/// A page push, a pop or a scroll therefore runs on stills, and the demos light up just after it.
+@MainActor
+@Observable
+final class LivePreviewBudget {
+    static let shared = LivePreviewBudget()
+
+    /// iPhone grids show about six cards; iPad grids 12–20, which is where the cap matters. Six keeps every
+    /// grid on an A12X iPad Pro under 1 % stalled frames (`PreviewBench` / `-ML_perfLog`); eight did not.
+    /// `-ML_liveBudget <n>` overrides it (performance tests).
+    let limit: Int = {
+        let override = UserDefaults.standard.object(forKey: "ML_liveBudget") as? Int
+            ?? Int(UserDefaults.standard.string(forKey: "ML_liveBudget") ?? "")
+        return override ?? 6
+    }()
+    /// `-ML_liveStagger NO` starts every slot at once (the earlier behaviour, for A/B tests).
+    private static let staggers: Bool = UserDefaults.standard.object(forKey: "ML_liveStagger") == nil
+        || UserDefaults.standard.bool(forKey: "ML_liveStagger")
+    private static let settle: Duration = staggers ? .milliseconds(350) : .zero
+    private static let spacing: Duration = staggers ? .milliseconds(100) : .zero
+
+    private(set) var order: [UUID] = []
+    /// Thumbnails currently playing live (always within the first `limit` of `order`).
+    private(set) var granted: Set<UUID> = []
+    @ObservationIgnored private var lastChange = ContinuousClock.now
+    @ObservationIgnored private var ticker: Task<Void, Never>?
+
+    func enter(_ id: UUID) {
+        guard !order.contains(id) else { return }
+        order.append(id)
+        lastChange = .now
+        schedule()
+    }
+
+    func leave(_ id: UUID) {
+        guard let index = order.firstIndex(of: id) else { return }
+        order.remove(at: index)
+        granted.remove(id)
+        lastChange = .now
+        schedule()
+    }
+
+    func allows(_ id: UUID) -> Bool {
+        granted.contains(id)
+    }
+
+    private func schedule() {
+        guard ticker == nil else { return }
+        ticker = Task { [weak self] in
+            await self?.grantPending()
+        }
+    }
+
+    private func grantPending() async {
+        while !Task.isCancelled {
+            let eligible = order.prefix(limit)
+            guard let next = eligible.first(where: { !granted.contains($0) }) else { break }
+            let quietSince = ContinuousClock.now - lastChange
+            if quietSince < Self.settle || (Self.staggers && SnapshotGate.scrolling) {
+                try? await Task.sleep(for: .milliseconds(60))
+                continue
+            }
+            granted.insert(next)
+            if Self.staggers { try? await Task.sleep(for: Self.spacing) }
+        }
+        ticker = nil
+    }
+}
+
+/// Still thumbnails on disk (Caches/PreviewStills/<build>/), so a still is rendered once per install
+/// and build instead of once per launch or memory eviction. Reads and writes happen off the main thread.
+enum PreviewStillDiskCache {
+    private static let folder: URL? = {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+        let url = caches.appendingPathComponent("PreviewStills", isDirectory: true).appendingPathComponent(build, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    private static let queue = DispatchQueue(label: "PreviewStillDiskCache", qos: .utility)
+
+    private static func url(for key: String) -> URL? {
+        let name = key.map { $0.isLetter || $0.isNumber || $0 == "-" ? String($0) : "_" }.joined()
+        return folder?.appendingPathComponent(name + ".png")
+    }
+
+    static func store(_ image: UIImage, key: String) {
+        guard let url = url(for: key) else { return }
+        queue.async {
+            guard let data = image.pngData() else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    static func load(key: String, scale: CGFloat) async -> UIImage? {
+        guard let url = url(for: key), scale > 0 else { return nil }
+        return await withCheckedContinuation { continuation in
+            queue.async {
+                guard let data = try? Data(contentsOf: url), let image = UIImage(data: data, scale: scale) else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                // Decode here, not on the main thread at first display.
+                continuation.resume(returning: image.preparingForDisplay() ?? image)
+            }
         }
     }
 }
@@ -295,8 +466,8 @@ final class PreviewSnapshotCache: @unchecked Sendable {
 }
 
 /// Spaces out snapshot renders so they never starve the main thread:
-/// - after each `ImageRenderer` pass the next one waits at least twice as long as that pass took
-///   (min 20 ms), so the UI always gets most of the frames even when a demo is expensive to draw;
+/// - after each `ImageRenderer` pass the next one waits half as long as that pass took (min 6 ms), so the
+///   UI keeps most of every frame while a screenful of stills still fills in well under a second;
 /// - `hold(for:)` pauses all renders while a page plays its entrance (the detail page calls it),
 ///   so thumbnails in the Variations row never compete with the stage and the page's own motion;
 /// - no render starts while any scroll view is moving (`pausesSnapshotsWhileScrolling()` reports
@@ -315,13 +486,18 @@ enum SnapshotGate {
     private static let staleScroll: Duration = .seconds(2.5)
 
     static func beginScroll(_ id: UUID) {
+        if activeScrolls.isEmpty { PerfLog.log("scroll begin") }
         activeScrolls[id] = ContinuousClock.now
     }
 
     static func endScroll(_ id: UUID) {
         guard activeScrolls.removeValue(forKey: id) != nil else { return }
-        if activeScrolls.isEmpty { hold(for: .milliseconds(150)) }
+        if activeScrolls.isEmpty { PerfLog.log("scroll end") }
+        if activeScrolls.isEmpty { hold(for: .milliseconds(80)) }
     }
+
+    /// Whether any scroll view is moving (`LivePreviewBudget` waits for it before starting demos).
+    static var scrolling: Bool { isScrolling }
 
     /// Whether a live (not stale) scroll is in progress; stale tokens are dropped.
     private static var isScrolling: Bool {
@@ -338,12 +514,12 @@ enum SnapshotGate {
         let clock = ContinuousClock()
         while !Task.isCancelled {
             if isScrolling || (!urgent && urgentWaiting > 0) {
-                try? await Task.sleep(for: .milliseconds(urgent ? 40 : 80))
+                try? await Task.sleep(for: .milliseconds(urgent ? 30 : 50))
                 continue
             }
             let now = clock.now
             if now >= nextSlot {
-                nextSlot = now + .milliseconds(20)
+                nextSlot = now + .milliseconds(6)
                 return
             }
             try? await Task.sleep(until: nextSlot, clock: clock)
@@ -351,7 +527,7 @@ enum SnapshotGate {
     }
 
     static func didRender(taking duration: Duration) {
-        let breathing = max(duration * 2, .milliseconds(20))
+        let breathing = max(duration / 2, .milliseconds(6))
         let candidate = ContinuousClock.now + breathing
         if candidate > nextSlot { nextSlot = candidate }
     }

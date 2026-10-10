@@ -129,6 +129,7 @@ struct FamilyView: View {
 /// Previews play even when "Animate previews" is off (this view exists to watch them move),
 /// but never with Reduce Motion.
 private struct FamilyCompareList: View {
+    @Environment(\.previewMotionEnabled) private var previewMotion
     let effects: [Effect]
     /// Shared with the grid so each stage flies between layouts (nil with Reduce Motion).
     let stageNamespace: Namespace.ID?
@@ -166,7 +167,8 @@ private struct FamilyCompareList: View {
                 }
             }
         }
-        .environment(\.previewMotionEnabled, !reduceMotion)
+        // Follows the "Animate previews" setting like every other list (off by default on iPad).
+        .environment(\.previewMotionEnabled, previewMotion && !reduceMotion)
         .environment(\.demoSyncEpoch, epoch)
     }
 
@@ -468,6 +470,8 @@ struct FamilyPreviewStrip: View {
 private struct StripSlot: View {
     let effect: Effect
     let isLit: Bool
+    /// The "Animate previews" setting: off, the lit slot stays a still too.
+    @Environment(\.previewMotionEnabled) private var motionAllowed
     @Environment(\.appLanguage) private var language
     @Environment(\.colorScheme) private var colorScheme
 
@@ -479,8 +483,8 @@ private struct StripSlot: View {
             && PreviewSnapshotCache.shared.hasStill(effectID: effect.id, language: language, dark: colorScheme == .dark)
         ZStack {
             PreviewStage(effect: effect, cornerRadius: 14)
-                .environment(\.previewMotionEnabled, layered ? false : isLit)
-            if layered && isLit {
+                .environment(\.previewMotionEnabled, layered ? false : isLit && motionAllowed)
+            if layered && isLit && motionAllowed {
                 PreviewStage(effect: effect, cornerRadius: 14, showsBackground: false)
                     .modifier(LiveLayerFadeIn(cornerRadius: 14, immediate: !hasStill))
                     .environment(\.previewMotionEnabled, true)

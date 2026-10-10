@@ -303,6 +303,9 @@ struct RoutedStack<Content: View>: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { self.router.path = path }
         }
+        .onChange(of: router.path) { _, path in
+            PerfLog.log("nav \(path.last?.destination ?? "root")")
+        }
         .onChange(of: navigator.searchRevision) {
             if popsToRootOnSearch { self.router.path = [] }
         }
@@ -445,14 +448,24 @@ private struct PressDepth: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if depth > 0 {
-            let radius: CGFloat = isPressed ? depth * 0.35 : depth
-            let y: CGFloat = isPressed ? depth * 0.15 : depth * 0.5
             let dim: Double = isPressed ? (isDark ? 0.05 : -0.035) : 0
             // Deeper on the ink page so glossy tiles still float in dark mode.
-            let opacity: Double = isDark ? (isPressed ? 0.3 : 0.5) : (isPressed ? 0.05 : 0.09)
+            // Two pre-blurred plates cross-fade instead of animating a live `.shadow`, which would re-blur the
+            // whole tile every frame while anything else on the page animates (see `ShadowPlate`).
+            let restOpacity: Double = isDark ? 0.5 : 0.09
+            let pressedOpacity: Double = isDark ? 0.3 : 0.05
             content
                 .brightness(dim)
-                .shadow(color: Color.black.opacity(opacity), radius: radius, y: y)
+                .background {
+                    ZStack {
+                        ShadowPlate(cornerRadius: CornerRadius.section, radius: depth, opacity: restOpacity)
+                            .offset(y: depth * 0.5)
+                            .opacity(isPressed ? 0 : 1)
+                        ShadowPlate(cornerRadius: CornerRadius.section, radius: depth * 0.35, opacity: pressedOpacity)
+                            .offset(y: depth * 0.15)
+                            .opacity(isPressed ? 1 : 0)
+                    }
+                }
         } else {
             content
         }

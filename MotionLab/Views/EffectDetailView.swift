@@ -66,7 +66,9 @@ struct EffectDetailView: View {
         let stageHeight = fittedStageHeight
         ScrollViewReader { reader in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                // Lazy: the prompt, implementation, tags and related cards below the fold are built when they
+                // scroll in, not in the push's first frame (on an A12X iPad that frame took ~300 ms).
+                LazyVStack(alignment: .leading, spacing: 18) {
                     header(variations: variations)
                     if variations.count > 1, let family = EffectFamilies.family(for: effect) {
                         VariationStrip(
@@ -169,7 +171,7 @@ struct EffectDetailView: View {
         .onAppear {
             // Let the stage and the page entrance have the main thread before thumbnails rasterise.
             // Kept short: the Variations row's small stills sit above the fold and should not wait long.
-            SnapshotGate.hold(for: .milliseconds(450))
+            SnapshotGate.hold(for: .milliseconds(200))
             Haptics.quiet(for: 2.5)
             recents.record(effect.id)
         }

@@ -11,6 +11,9 @@ struct MotionLabApp: App {
     init() {
         // First launch: follow the device language (zh* → 中文, otherwise English) and remember it.
         AppLanguage.registerInitialChoice()
+        // iPad lists show still frames by default: a screenful of 12–20 live demos is more than an older iPad
+        // GPU keeps at frame rate. iPhone keeps live previews. The Settings toggle overrides either.
+        UserDefaults.standard.register(defaults: ["app.animatePreviews": UIDevice.current.userInterfaceIdiom != .pad])
         if CatalogTools.shouldExport {
             CatalogTools.exportCatalog()
         }
@@ -31,6 +34,10 @@ struct MotionLabApp: App {
                 .preferredColorScheme(colorScheme)
                 .tint(Palette.accent)
                 .onOpenURL { navigator.open($0) }
+                .onAppear {
+                    PerfLog.start()
+                    LaunchWarmup.run()
+                }
                 .task {
                     // CI: measure every still thumbnail once the window is up (see `CatalogTools`).
                     if CatalogTools.shouldAuditStills {
@@ -42,7 +49,9 @@ struct MotionLabApp: App {
 
     /// CI video capture renders a single effect (or the promo trailer); everything else gets the full app.
     @ViewBuilder private var rootContent: some View {
-        if CatalogTools.isTrailer {
+        if PerfLog.enabled && UserDefaults.standard.bool(forKey: "ML_bench") {
+            PreviewBench()
+        } else if CatalogTools.isTrailer {
             TrailerView()
         } else if let stageID = CatalogTools.stageEffectID {
             StageOnlyView(effectID: stageID)

@@ -31,9 +31,22 @@ private let scrollSlotColors: [Color] = [Palette.amber, Palette.pink, Palette.sk
 private let scrollSlotCells = 96
 private let scrollSlotCell: CGFloat = 64
 
+/// What one reel is told to do: rest on `cell`, or (a spin) jump to `recenter` without animation, then
+/// spring to `cell` over `duration`. A new `id` is a new command.
+private struct ScrollSlotCommand: Equatable {
+    var id = 0
+    var cell: Int
+    var recenter: Int? = nil
+    var duration: Double = 0
+    var bounce: Double = 0
+}
+
 private struct ScrollSlotDemo: View {
     let ctx: DemoContext
-    @State private var positions: [ScrollPosition] = Array(repeating: ScrollPosition(edge: .top), count: 3)
+    /// One command per reel. Each reel owns its `ScrollPosition`: binding three positions stored in one
+    /// array made every reel's scroll rewrite the array, which re-applied all three positions in an
+    /// endless update loop that starved the main actor (autoplay and every other task stopped).
+    @State private var commands: [ScrollSlotCommand]
     @State private var targets: [Int]
     /// The cell each reel actually rests on, including hand flicks (spins start from here).
     @State private var resting: [Int]
@@ -48,6 +61,7 @@ private struct ScrollSlotDemo: View {
         let start: [Int] = ctx.isStill ? [0, 0, 0] : [10, 13, 18]
         _targets = State(initialValue: start)
         _resting = State(initialValue: start)
+        _commands = State(initialValue: start.map { ScrollSlotCommand(cell: $0) })
         _win = State(initialValue: ctx.isStill)
     }
 
@@ -57,9 +71,6 @@ private struct ScrollSlotDemo: View {
             spinButton
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            for k in 0..<3 { positions[k].scrollTo(y: CGFloat(targets[k]) * scrollSlotCell) }
-        }
         .autoplay(ctx.isPreview, every: 2.8) { spin() }
     }
 
@@ -67,7 +78,7 @@ private struct ScrollSlotDemo: View {
         HStack(spacing: 8) {
             ForEach(0..<3, id: \.self) { k in
                 ScrollSlotReel(
-                    position: $positions[k],
+                    command: commands[k],
                     locked: spinning,
                     onCell: { resting[k] = $0 },
                     onSettle: { handSettled() }
@@ -117,11 +128,6 @@ private struct ScrollSlotDemo: View {
         for k in 0..<3 where starts[k] > count * 5 {
             starts[k] -= count * ((starts[k] - count * 2) / count)
         }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            for k in 0..<3 { positions[k].scrollTo(y: CGFloat(starts[k]) * scrollSlotCell) }
-        }
         // Every third spin lines up for the demo's payoff.
         let jackpot = spins % 3 == 0
         let jackpotSymbol = Int.random(in: 0..<count)
@@ -135,16 +141,12 @@ private struct ScrollSlotDemo: View {
             next.append(min(target, scrollSlotCells - 1))
         }
         targets = next
-        DispatchQueue.main.async {
-            for k in 0..<3 {
-                let duration = ctx["duration"] + Double(k) * 0.45
-                withAnimation(.spring(duration: duration, bounce: ctx["bounce"])) {
-                    positions[k].scrollTo(y: CGFloat(next[k]) * scrollSlotCell)
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + duration * 0.8) {
-                    if !muted { Haptics.tap(.rigid) }
-                    if k == 2 { finish(haptic: !muted) }
-                }
+        for k in 0..<3 {
+            let duration = ctx["duration"] + Double(k) * 0.45
+            commands[k] = ScrollSlotCommand(id: spins, cell: next[k], recenter: starts[k], duration: duration, bounce: ctx["bounce"])
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration * 0.8) {
+                if !muted { Haptics.tap(.rigid) }
+                if k == 2 { finish(haptic: !muted) }
             }
         }
     }
@@ -173,7 +175,8 @@ private struct ScrollSlotDemo: View {
 }
 
 private struct ScrollSlotReel: View {
-    @Binding var position: ScrollPosition
+    let command: ScrollSlotCommand
+    @State private var position = ScrollPosition(edge: .top)
     /// True during a spin: a hand flick then can't move the reel off the row `finish` judges.
     let locked: Bool
     let onCell: (Int) -> Void
@@ -207,6 +210,22 @@ private struct ScrollSlotReel: View {
         .scrollDisabled(locked)
         .scrollTargetBehavior(ScrollStrideSnap(pitch: scrollSlotCell, axis: .vertical))
         .scrollPosition($position)
+        .onAppear {
+            position.scrollTo(y: CGFloat(command.cell) * scrollSlotCell)
+        }
+        .onChange(of: command) { _, command in
+            if let recenter = command.recenter {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { position.scrollTo(y: CGFloat(recenter) * scrollSlotCell) }
+            }
+            // Next turn of the run loop, so the jump back lands before the spin starts.
+            DispatchQueue.main.async {
+                withAnimation(.spring(duration: command.duration, bounce: command.bounce)) {
+                    position.scrollTo(y: CGFloat(command.cell) * scrollSlotCell)
+                }
+            }
+        }
         .onScrollGeometryChange(for: Int.self) { geometry in
             Int((geometry.contentOffset.y / scrollSlotCell).rounded())
         } action: { _, cell in

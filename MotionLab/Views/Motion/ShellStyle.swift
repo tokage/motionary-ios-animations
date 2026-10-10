@@ -1,3 +1,4 @@
+import CoreImage
 import SwiftUI
 
 // MARK: - Glossy widget card
@@ -10,7 +11,10 @@ import SwiftUI
 /// - Light mode: clean white with a hairline that darkens slightly towards the bottom edge and a
 ///   soft, wide shadow, so cards read as gently elevated rather than flat slabs.
 ///
-/// Shapes only (no blur, no offscreen content pass beyond the shape's own shadow).
+/// Shapes only, and the shadow is a pre-blurred, stretchable image (`ShadowPlate`): a SwiftUI `.shadow` is
+/// re-blurred every frame while anything in the same layer animates, and a grid of cards around live demos
+/// then costs one large blur per card per frame (measured on an A12X iPad: the grid lost ~20 % of its
+/// frames to it). The image is drawn once per style and only copied afterwards.
 struct GlossCardBackground: View {
     var cornerRadius: CGFloat
     /// Faint radial glow in the top-trailing corner (e.g. the category colour).
@@ -27,7 +31,6 @@ struct GlossCardBackground: View {
         let shadowOpacity: Double = dark ? (lifted ? 0.62 : 0.45) : (lifted ? 0.13 : 0.06)
         let shadowRadius: CGFloat = shadow ? (lifted ? 22 : (dark ? 16 : 12)) : 0
         let shadowY: CGFloat = shadow ? (lifted ? 12 : 6) : 0
-        let shadowColor: Color = shadow ? Color.black.opacity(shadowOpacity) : Color.clear
         let glowOpacity: Double = dark ? 0.2 : 0.1
         shape
             .fill(dark ? GlossTokens.darkFill : GlossTokens.lightFill)
@@ -46,7 +49,75 @@ struct GlossCardBackground: View {
             .overlay {
                 shape.strokeBorder(dark ? GlossTokens.darkRim : GlossTokens.lightRim, lineWidth: 0.5)
             }
-            .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
+            .background {
+                if shadow {
+                    ShadowPlate(cornerRadius: cornerRadius, radius: shadowRadius, opacity: shadowOpacity)
+                        .offset(y: shadowY)
+                }
+            }
+    }
+}
+
+/// A rounded rectangle's soft drop shadow as a nine-slice image: blurred once per (corner, radius,
+/// opacity, scale), then stretched to any card size. Matches `.shadow(color: .black.opacity(opacity),
+/// radius: radius)` around an opaque shape.
+struct ShadowPlate: View {
+    let cornerRadius: CGFloat
+    let radius: CGFloat
+    let opacity: Double
+    @Environment(\.displayScale) private var displayScale
+
+    var body: some View {
+        let plate = ShadowPlateCache.plate(cornerRadius: cornerRadius, radius: radius, opacity: opacity, scale: displayScale)
+        Image(uiImage: plate.image)
+            .resizable(capInsets: plate.insets, resizingMode: .stretch)
+            .padding(-plate.pad)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+private enum ShadowPlateCache {
+    struct Plate {
+        let image: UIImage
+        let insets: EdgeInsets
+        let pad: CGFloat
+    }
+
+    private static var plates: [String: Plate] = [:]
+
+    static func plate(cornerRadius: CGFloat, radius: CGFloat, opacity: Double, scale: CGFloat) -> Plate {
+        let key = "\(cornerRadius)|\(radius)|\(opacity)|\(scale)"
+        if let plate = plates[key] { return plate }
+        // The blur reaches about 3 sigma; SwiftUI's shadow radius is about 2 sigma.
+        let pad: CGFloat = (radius * 1.6).rounded(.up)
+        // Wide enough that the middle of each edge is a full-strength edge profile (6 sigma = 3 × radius).
+        let core: CGFloat = max(cornerRadius * 2, radius * 3).rounded(.up) + 2
+        let side: CGFloat = core + pad * 2
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+        let shape = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { context in
+            let rect = CGRect(x: pad, y: pad, width: core, height: core)
+            UIColor.black.withAlphaComponent(opacity).setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).fill()
+        }
+        // The shadow is the shape blurred (sigma = radius / 2, as SwiftUI's), so the part below an offset card
+        // fades out exactly like `.shadow`.
+        var image = shape
+        if let input = CIImage(image: shape) {
+            let blurred = input.clampedToExtent()
+                .applyingGaussianBlur(sigma: Double(radius / 2 * scale))
+                .cropped(to: input.extent)
+            if let cgImage = CIContext(options: [.useSoftwareRenderer: false]).createCGImage(blurred, from: input.extent) {
+                image = UIImage(cgImage: cgImage, scale: scale, orientation: .up)
+            }
+        }
+        let inset: CGFloat = pad + (core - 2) / 2
+        let plate = Plate(image: image, insets: EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset), pad: pad)
+        plates[key] = plate
+        return plate
     }
 }
 
